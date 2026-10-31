@@ -4,10 +4,13 @@ require "gyoku"
 
 module Savon
   class QualifiedMessage
-    def initialize(types, used_namespaces, key_converter)
+    # With qualify: false, keys and values are left as they are: only
+    # order!: :use_schema applies, for schemas with unqualified elements.
+    def initialize(types, used_namespaces, key_converter, qualify: true)
       @types           = types
       @used_namespaces = used_namespaces
       @key_converter   = key_converter
+      @qualify         = qualify
 
       # Schema tables are keyed by exact element names, but message keys pass
       # through the key converter first (:entity_ids becomes "entityIds" while
@@ -20,21 +23,21 @@ module Savon
     def to_hash(hash, path, schema_order: false)
       return hash unless hash
       return hash.map { |value| to_hash(value, path, schema_order: schema_order) } if hash.is_a?(Array)
-      return hash.to_s unless hash.is_a?(Hash)
+      return scalar(hash) unless hash.is_a?(Hash)
 
-      schema_order ||= hash[:order!] == :use_schema
+      schema_order ||= self.class.order_option(hash) == :use_schema
       tags_by_key = {}
 
       newhash = hash.each_with_object({}) do |(key, value), newhash|
         case key
-        when :order!
+        when :order!, "order!"
           newhash[key] = add_namespaces_to_values(value, path) unless value == :use_schema
         when :attributes!, :content!
           newhash[key] = to_hash(value, path)
         else
           if key.to_s =~ /!$/
             newhash[key] = value
-            tags_by_key[key] = translate_tag(key.to_s.chomp("!")) unless key.to_s == "order!"
+            tags_by_key[key] = translate_tag(key)
           else
             translated_key  = translate_tag(key)
             newkey          = add_namespaces_to_values(key, path).first
@@ -47,17 +50,32 @@ module Savon
         newhash
       end
 
-      newhash[:order!] = order_by_schema(tags_by_key, path) if schema_order && !newhash.key?(:order!)
+      newhash[:order!] = order_by_schema(tags_by_key, path) if schema_order && order_by_schema?(hash)
       newhash
     end
 
+    def self.order_option(hash)
+      hash.key?(:order!) ? hash[:order!] : hash["order!"]
+    end
+
     private
+
+    # An explicit order! wins, and a hash with content! is a single element.
+    def order_by_schema?(hash)
+      [nil, :use_schema].include?(self.class.order_option(hash)) && !hash.key?(:content!)
+    end
+
+    def scalar(value)
+      @qualify ? value.to_s : value
+    end
 
     def translate_tag(key)
       Gyoku.xml_tag(key, key_converter: @key_converter).to_s
     end
 
     def add_namespaces_to_values(values, path)
+      return Array(values) unless @qualify
+
       Array(values).collect do |value|
         translated_value = translate_tag(value)
         namespace_path   = path + [translated_value]
@@ -68,7 +86,13 @@ module Savon
 
     # Keys unknown to the schema keep their relative order after the known ones.
     def order_by_schema(tags_by_key, path)
-      position_by_tag = schema_children(path).each_with_index.to_h
+      children = schema_children(path)
+      if children.empty? && tags_by_key.any?
+        raise Error, "order!: :use_schema found no schema sequence for #{path.join('/')}: " \
+                     "give this level its own order! array"
+      end
+
+      position_by_tag = children.each_with_index.to_h
       tags_by_key.keys.sort_by.with_index do |key, index|
         [position_by_tag.fetch(tags_by_key[key].downcase, position_by_tag.size), index]
       end
@@ -76,9 +100,9 @@ module Savon
 
     def schema_children(path)
       parent = normalize_path(path)
-      @used_namespaces_index.keys.filter_map do |child|
+      (@schema_children ||= {})[parent] ||= @used_namespaces_index.keys.filter_map { |child|
         child.last if child.length == parent.length + 1 && child.first(parent.length) == parent
-      end
+      }
     end
 
     # Finds the schema entry for a message path. Converted message keys rarely

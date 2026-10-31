@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-* **`order!: :use_schema` orders a message like the WSDL's `xs:sequence`** ([#592](https://github.com/savonrb/savon/issues/592)). Nested hashes and arrays of hashes follow, keys unknown to the schema go last in the caller's order, and an explicit `order!` array on a nested hash still wins. Requires `elementFormDefault="qualified"`.
+* **`order!: :use_schema` orders a message like the WSDL's `xs:sequence`** ([#592](https://github.com/savonrb/savon/issues/592)). Nested hashes and arrays of hashes follow, keys unknown to the schema go last in the caller's order, and an explicit `order!` array on a nested hash still wins, whether the schema qualifies its elements or not. A level the schema doesn't describe raises `Savon::Error` instead of keeping the caller's order.
 
 ### Security
 
